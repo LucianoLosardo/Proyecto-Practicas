@@ -1,195 +1,163 @@
+
 import gc
 import json
 import os
-import time
 import cv2
+import numpy as np
 import torch
 
-MODEL_NAME = "md_v5a.0.0.pt"
-OUTPUT_JSON = "resultados_deteccion.json"
-
-
-def load_megadetector(model_path):
-    print(f"Cargando MegaDetector desde: {model_path}")
-    model = torch.hub.load(
-        "ultralytics/yolov5", "custom", path=model_path, trust_repo=True
+try:
+    from speciesnet import SpeciesNet
+except ImportError:
+    print(
+        "❌ No se encontró la librería 'speciesnet'. Ejecuta el script con: uv run process_speciesnet.py"
     )
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
-    print(f"Modelo cargado en: {device.upper()}")
+INPUT_DIR = "/mnt/disco/ProyectoJabali/jsons_filtrados"
+OUTPUT_DIR = "/mnt/disco/ProyectoJabali/Resultado_SpeciesNet"
+MODEL_PATH = "/mnt/disco/ProyectoJabali/SpeciesNet"
+
+def load_classifier():
+    """Carga el modelo SpeciesNet de Google."""
+    print("⏳ Cargando modelo SpeciesNet...")
+    model = SpeciesNet(model_name=MODEL_PATH)
+    print("✅ Modelo SpeciesNet cargado correctamente.")
     return model
 
 
-def process_video(
-    video_path, model, conf_threshold=0.2, frame_skip=10, img_size=640, lote=""
-):
-    """Procesa un video extrayendo bbox, clases, certezas y optimizando el consumo de RAM/VRAM."""
+def crop_bbox(frame, bbox):
+    """Corta la región indicada por el Bounding Box [xmin, ymin, xmax, ymax]."""
+    h, w, _ = frame.shape
+    xmin, ymin, xmax, ymax = bbox
+
+    xmin = max(0, min(int(xmin), w - 1))
+    ymin = max(0, min(int(ymin), h - 1))
+    xmax = max(xmin + 1, min(int(xmax), w))
+    ymax = max(ymin + 1, min(int(ymax), h))
+
+    return frame[ymin:ymax, xmin:xmax]
+
+
+def process_video_species(video_data, model):
+    """Abre el video, extrae los recortes de cada fotograma detectado y ejecuta SpeciesNet."""
+    video_path = video_data.get("filepath")
+    if not video_path or not os.path.exists(video_path):
+        print(f"⚠️ Video no encontrado: {video_path}")
+        return video_data
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"Error abriendo el archivo de video: {video_path}")
-        return None
+        print(f"❌ Error al abrir el video: {video_path}")
+        return video_data
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    filename = os.path.basename(video_path)
+    species_summary = {}
 
-    video_record = {
-        "file": filename,
-        "filepath": video_path,
-        "lote": lote,  
-        "summary": {
-            "detected_classes": [],
-            "max_confidence": {},
-            "total_detections_count": 0,
-        },
-        "frame_detections": [],
-    }
+    for frame_det in video_data.get("frame_detections", []):
+        frame_num = frame_det.get("frame")
 
-    frame_count = 0
-    total_detections = 0
-    max_conf_by_class = {}
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num - 1)
+        ret, frame = cap.read()
+        if not ret:
+            continue
 
-    with torch.inference_mode():
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            frame_count += 1
-            if frame_count % frame_skip != 0:
-                continue
+        for det in frame_det.get("detections", []):
+            if det.get("label") == "animal":
+                bbox = det.get("bbox")
+                crop = crop_bbox(frame_rgb, bbox)
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                if crop.size == 0:
+                    continue
 
-            results = model(frame_rgb, size=img_size)
-            preds = results.pred[0]
+                try:
+                    predictions = model.predict(crop)
 
-            current_frame_dets = []
+                    if isinstance(predictions, list) and len(predictions) > 0:
+                        pred = predictions[0]
+                    else:
+                        pred = predictions
 
-            for *box, conf, cls in preds:
-                score = round(float(conf), 4)
-                if score >= conf_threshold:
-                    class_id = int(cls)
-                    label = model.names.get(class_id, str(class_id))
-                    bbox = [round(float(coord), 1) for coord in box]
+                    species_name = pred.get("prediction", "Desconocido")
+                    scientific_name = pred.get("scientific_name", "N/A")
+                    species_conf = round(float(pred.get("confidence", 0.0)), 4)
 
-                    current_frame_dets.append(
-                        {
-                            "class_id": class_id,
-                            "label": label,
-                            "confidence": score,
-                            "bbox": bbox,
-                        }
-                    )
+                except Exception as e:
+                    species_name = "Error en Clasificación"
+                    scientific_name = str(e)
+                    species_conf = 0.0
 
-                    total_detections += 1
-                    if (
-                        label not in max_conf_by_class
-                        or score > max_conf_by_class[label]
-                    ):
-                        max_conf_by_class[label] = score
+                det["species_prediction"] = species_name
+                det["scientific_name"] = scientific_name
+                det["species_confidence"] = species_conf
 
-            if current_frame_dets:
-                video_record["frame_detections"].append(
-                    {
-                        "frame": frame_count,
-                        "time_sec": round(frame_count / fps, 2),
-                        "detections": current_frame_dets,
-                    }
+                species_summary[species_name] = (
+                    species_summary.get(species_name, 0) + 1
                 )
 
-            del frame, frame_rgb, results, preds
-
     cap.release()
-
-    video_record["summary"]["detected_classes"] = list(max_conf_by_class.keys())
-    video_record["summary"]["max_confidence"] = max_conf_by_class
-    video_record["summary"]["total_detections_count"] = total_detections
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    gc.collect()
-
-    return video_record
+    video_data["summary"]["species_counts"] = species_summary
+    return video_data
 
 
 def main():
-    start_time = time.time()
-
-    data_dir = "/mnt/disco/ProyectoJabali/FotosCamarasTrampas/SL002/20240620/DCIM/100_BTCF"
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(base_dir, MODEL_NAME)
-
-    if not os.path.exists(data_dir):
-        print(f"Error: La carpeta {data_dir} no existe o no está montada.")
+    if not os.path.exists(INPUT_DIR):
+        print(f"❌ La carpeta de entrada {INPUT_DIR} no existe.")
         return
 
-    #Extraer nombre del Lote 
-    parent_folder = os.path.basename(os.path.dirname(data_dir))
-    curr_folder = os.path.basename(data_dir)
-    lote_name = f"{parent_folder} / {curr_folder}"
+    # 🔍 Búsqueda RECURSIVA de archivos .json
+    json_files = []
+    for root, _, files in os.walk(INPUT_DIR):
+        for file in files:
+            if file.lower().endswith(".json"):
+                json_files.append(os.path.join(root, file))
 
-    model = load_megadetector(model_path)
-    video_extensions = (".mp4", ".avi", ".mov", ".mkv")
+    if not json_files:
+        print(
+            f"⚠️ No se encontraron archivos JSON en {INPUT_DIR} ni en sus subcarpetas."
+        )
+        return
 
-    files = [
-        f for f in os.listdir(data_dir) if f.lower().endswith(video_extensions)
-    ]
     print(
-        f"Encontrados {len(files)} videos en Lote [{lote_name}]. Procesando..."
+        f"📂 Se encontraron {len(json_files)} archivo(s) JSON en total. Procesando con SpeciesNet..."
     )
+    model = load_classifier()
 
-    all_results = []
+    for idx, input_path in enumerate(sorted(json_files), 1):
+        # 📁 Replicar la estructura de subcarpetas en el directorio de salida
+        rel_path = os.path.relpath(input_path, INPUT_DIR)
+        output_path = os.path.join(OUTPUT_DIR, rel_path)
 
-    for idx, filename in enumerate(sorted(files), 1):
-        video_path = os.path.join(data_dir, filename)
-        print(f"[{idx}/{len(files)}] Procesando: {filename}...")
+        # Crear subcarpetas si no existen
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        result = process_video(
-            video_path,
-            model,
-            conf_threshold=0.2,
-            frame_skip=10,
-            img_size=640,
-            lote=lote_name,
-        )
-        if result:
-            all_results.append(result)
+        print(f"\n[{idx}/{len(json_files)}] Procesando: {rel_path}")
 
-    #Cálculo de tiempo total
-    total_elapsed = time.time() - start_time
-    elapsed_seconds = round(total_elapsed, 2)
+        with open(input_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    hrs = int(total_elapsed // 3600)
-    mins = int((total_elapsed % 3600) // 60)
-    secs = int(total_elapsed % 60)
-    time_formatted = f"{hrs:02d}:{mins:02d}:{secs:02d}"
+        if "metadata" in data:
+            data["metadata"]["species_model"] = "Google SpeciesNet"
 
-    # Exportar JSON con metadatos de Lote y Tiempo
-    json_output_path = os.path.join(base_dir, OUTPUT_JSON)
-    with open(json_output_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "metadata": {
-                    "model": MODEL_NAME,
-                    "conf_threshold": 0.2,
-                    "frame_skip": 10,
-                    "total_videos": len(all_results),
-                    "lote": lote_name,  
-                    "execution_time_seconds": elapsed_seconds,
-                    "execution_time_formatted": time_formatted,
-                },
-                "videos": all_results,
-            },
-            f,
-            indent=4,
-            ensure_ascii=False,
-        )
+        videos = data.get("videos", [])
+        for v_idx, video_data in enumerate(videos, 1):
+            print(
+                f"   └─ Video {v_idx}/{len(videos)}: {video_data.get('file')}"
+            )
+            process_video_species(video_data, model)
 
-    print(f"\n¡Proceso completado con éxito!")
-    print(f" Lote: {lote_name}")
-    print(f" Tiempo total: {time_formatted} ({elapsed_seconds} seg)")
-    print(f" JSON guardado en: {json_output_path}")
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+
+        print(f"   💾 Guardado en: {output_path}")
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    print(
+        f"\n🎉 ¡Proceso completado! Todos los archivos procesados se encuentran en:\n👉 {OUTPUT_DIR}"
+    )
 
 
 if __name__ == "__main__":

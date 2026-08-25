@@ -5,6 +5,7 @@ description = "Detección de fauna en cámaras trampa usando MegaDetector v5"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "speciesnet",
     "numpy>=1.26.0",
     "opencv-python>=4.8.0",
     "openpyxl>=3.1.5",
