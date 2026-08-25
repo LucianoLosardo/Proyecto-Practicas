@@ -6,3 +6,5 @@ Herramienta en Python diseñada para procesar masivamente videos de cámaras tra
 
     - Exportación Estructurada a JSON: Guarda cuadros delimitadores (bbox), marcas de tiempo en segundos (time_sec), fotograma exacto (frame), clases detectadas y niveles de certeza (confidence).
 
+Proceso actual: 
+    - Filtrado de JSONS 
