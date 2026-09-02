@@ -1,0 +1,7 @@
+1 - aplanar_y_vincular
+2 - merge_json
+3 - run_md_and_speciesnet:
+
+python run_md_and_speciesnet.py "VIDEOS" "JSON SALIDA" --detections_file "JSON ENTRADA (MD)" --classifier_batch_size 16 --loader_workers 4
+
+
