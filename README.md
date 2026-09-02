@@ -1,0 +1,1 @@
+Este es un test reducido en el cual se implementa un pipeline con MegaDetector y SpeciesNet y se testea su fiabilidad con el conjunto de videos presentes en la siguiente [carpeta](https://drive.google.com/drive/folders/12-0S73oFzX3RwOioZPqSAFCTOtEoZi9L)
