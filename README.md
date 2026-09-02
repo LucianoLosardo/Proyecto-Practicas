@@ -1,1 +1,2 @@
-Este es un test reducido en el cual se implementa un pipeline con MegaDetector y SpeciesNet y se testea su fiabilidad con el conjunto de videos presentes en la siguiente [carpeta](https://drive.google.com/drive/folders/12-0S73oFzX3RwOioZPqSAFCTOtEoZi9L)
+Este es un test reducido en el cual se implementa un pipeline con MegaDetector y SpeciesNet y se testea su fiabilidad con el conjunto de videos presentes en la siguiente [carpeta](https://drive.google.com/drive/folders/12-0S73oFzX3RwOioZPqSAFCTOtEoZi9L).
+El informe del test se encuentra en el siguiente [link](https://docs.google.com/document/d/1-tqTeWiFvWKPJnvOA8aH5d72rE1QKhtKyp4PeNcGuEs/edit?tab=t.esgbz7j11zct#heading=h.lpz9am562iim)
