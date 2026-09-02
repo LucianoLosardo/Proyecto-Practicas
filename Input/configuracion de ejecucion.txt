@@ -1,0 +1,18 @@
+_______________
+MEGA DETECTOR
+_______________
+
+python process_video.py MDV5A "C:\Users\Kiara\Desktop\practicas\FotoTrampeo" --frame_sample 15 --recursive --output_json_file "C:\Users\Kiara\Desktop\practicas\Mega Detector\detection_results.json"
+
+
+
+_______________
+SPECIES NET
+_______________
+
+python run_md_and_speciesnet.py "C:\Users\Kiara\Desktop\practicas\FotoTrampeo" "C:\Users\Kiara\Desktop\practicas\Mega Detector\detection_result_sn.json" --detections_file "C:\Users\Kiara\Desktop\practicas\Mega Detector\detection_results.json" --classifier_batch_size 16 --loader_workers 4
+
+
+COn carpeta de json:
+
+python run_md_and_speciesnet.py "C:\Users\Kiara\Desktop\practicas\FotoTrampeo" "C:\Users\Kiara\Desktop\practicas\Mega Detector\Test múltiples jsons\output_sn.json" --detections_file "C:\Users\Kiara\Desktop\practicas\Mega Detector\Test múltiples jsons\jsons" --classifier_batch_size 16 --loader_workers 4
