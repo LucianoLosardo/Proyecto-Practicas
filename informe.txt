@@ -1,0 +1,3 @@
+3-9
+anduvo, encontró 30 jsons de 31 videos (BIEN, saqué trampa_peludo de los json para probar esto)
+proceso 29 coincidencias, hubo una para la que falló (habia solo 2 que coincidian en nombre, probar sin la aprte de SN para ver qué onda)deac

@@ -7,10 +7,17 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.env
 *.pt
 
 reporte_detecciones.xlsx
 resultados_deteccion.json
 
 comando.txt
+temp_frames/
+FotoTrampeo/
+jsons/
+env/
+.temp_frames
+.FotoTrampeo
+.jsons

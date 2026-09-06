@@ -1,164 +1,181 @@
-
-import gc
-import json
 import os
+import json
 import cv2
-import numpy as np
-import torch
+from pathlib import Path
+from speciesnet import SpeciesNet, DEFAULT_MODEL
+from speciesnet.utils import prepare_instances_dict, load_partial_predictions
 
-try:
-    from speciesnet import SpeciesNet
-except ImportError:
-    print(
-        "❌ No se encontró la librería 'speciesnet'. Ejecuta el script con: uv run process_speciesnet.py"
-    )
+# -------------------------------------------------------------------------
+# Configuración de Rutas y Parámetros
+# -------------------------------------------------------------------------
+VIDEOS_DIR = Path("./FotoTrampeo")
+JSONS_DIR = Path("./jsons")
+TEMP_FRAMES_DIR = Path("./temp_frames")
+OUTPUT_JSON = "especies_resultados_finales.json"
+COUNTRY_CODE = "ARG"
 
-INPUT_DIR = "/mnt/disco/ProyectoJabali/jsons_filtrados"
-OUTPUT_DIR = "/mnt/disco/ProyectoJabali/Resultado_SpeciesNet"
-MODEL_PATH = "/mnt/disco/ProyectoJabali/SpeciesNet"
+def extract_key(path: Path) -> str:
+    """
+    Extrae la clave única basada en (SL---, fecha, nombre_video/carpeta)
+    recorriendo los padres de la ruta.
+    Ejemplo: FotoTrampeo/SL000/20250607/DCMI/IMG_0005.mp4 -> 'SL000/20250607/IMG_0005'
+    """
+    parts = path.parts
+    sl_part = None
+    fecha_part = None
+    
+    # Buscar las carpetas que representan el SL--- y la fecha dentro de la ruta
+    for i, part in enumerate(parts):
+        if part.startswith("SL"):
+            sl_part = part
+            if i + 1 < len(parts):
+                fecha_part = parts[i + 1]
+            break
+            
+    if not sl_part or not fecha_part:
+        return None
 
-def load_classifier():
-    """Carga el modelo SpeciesNet de Google."""
-    print("⏳ Cargando modelo SpeciesNet...")
-    model = SpeciesNet(model_name=MODEL_PATH)
-    print("✅ Modelo SpeciesNet cargado correctamente.")
-    return model
+    # Si es un archivo .mp4 tomamos el stem (sin extension), si es un json tomamos el nombre del directorio padre
+    item_name = path.stem if path.suffix.lower() in [".mp4", ".m4v"] else path.parent.name
+    
+    return f"{sl_part}/{fecha_part}/{item_name}"
 
+def index_videos(base_path: Path) -> dict:
+    """Busca todos los mp4/m4v y los mapea usando la clave única (SL/fecha/video)."""
+    video_map = {}
+    for ext in ["*.mp4", "*.m4v"]:
+        for path in base_path.rglob(ext):
+            key = extract_key(path)
+            if key:
+                video_map[key] = path
+    return video_map
 
-def crop_bbox(frame, bbox):
-    """Corta la región indicada por el Bounding Box [xmin, ymin, xmax, ymax]."""
-    h, w, _ = frame.shape
-    xmin, ymin, xmax, ymax = bbox
+def process_video_and_json(video_path: Path, json_path: Path, temp_dir: Path, key_prefix: str):
+    """Extrae frames del video e ingresa las detecciones formateadas."""
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
 
-    xmin = max(0, min(int(xmin), w - 1))
-    ymin = max(0, min(int(ymin), h - 1))
-    xmax = max(xmin + 1, min(int(xmax), w))
-    ymax = max(ymin + 1, min(int(ymax), h))
+    category_map = data.get("detection_categories", {})
+    cap = cv2.VideoCapture(str(video_path))
+    processed_filepaths = []
+    formatted_detections = {}
 
-    return frame[ymin:ymax, xmin:xmax]
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
-
-def process_video_species(video_data, model):
-    """Abre el video, extrae los recortes de cada fotograma detectado y ejecuta SpeciesNet."""
-    video_path = video_data.get("filepath")
-    if not video_path or not os.path.exists(video_path):
-        print(f"⚠️ Video no encontrado: {video_path}")
-        return video_data
-
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"❌ Error al abrir el video: {video_path}")
-        return video_data
-
-    species_summary = {}
-
-    for frame_det in video_data.get("frame_detections", []):
-        frame_num = frame_det.get("frame")
-
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num - 1)
-        ret, frame = cap.read()
-        if not ret:
+    for item in data.get("images", []):
+        file_name = item["file"]  # ej: "frame_000000.jpg"
+        
+        try:
+            frame_idx = int(file_name.replace("frame_", "").replace(".jpg", ""))
+        except ValueError:
             continue
 
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
 
-        for det in frame_det.get("detections", []):
-            if det.get("label") == "animal":
-                bbox = det.get("bbox")
-                crop = crop_bbox(frame_rgb, bbox)
+        if ret:
+            # Prefijo sanitized para evitar conflictos en nombres de archivo guardados
+            safe_prefix = key_prefix.replace("/", "_")
+            frame_out_path = temp_dir / f"{safe_prefix}_{file_name}"
+            cv2.imwrite(str(frame_out_path), frame)
+            
+            filepath_str = str(frame_out_path.resolve())
+            processed_filepaths.append(filepath_str)
 
-                if crop.size == 0:
-                    continue
+            det_list = []
+            for d in item.get("detections", []):
+                cat_name = category_map.get(str(d.get("category")), "animal")
+                det_list.append({
+                    "label": cat_name,
+                    "conf": d.get("conf", 0.0),
+                    "bbox": d.get("bbox", [])
+                })
 
-                try:
-                    predictions = model.predict(crop)
-
-                    if isinstance(predictions, list) and len(predictions) > 0:
-                        pred = predictions[0]
-                    else:
-                        pred = predictions
-
-                    species_name = pred.get("prediction", "Desconocido")
-                    scientific_name = pred.get("scientific_name", "N/A")
-                    species_conf = round(float(pred.get("confidence", 0.0)), 4)
-
-                except Exception as e:
-                    species_name = "Error en Clasificación"
-                    scientific_name = str(e)
-                    species_conf = 0.0
-
-                det["species_prediction"] = species_name
-                det["scientific_name"] = scientific_name
-                det["species_confidence"] = species_conf
-
-                species_summary[species_name] = (
-                    species_summary.get(species_name, 0) + 1
-                )
+            formatted_detections[filepath_str] = {"detections": det_list}
 
     cap.release()
-    video_data["summary"]["species_counts"] = species_summary
-    return video_data
-
+    return processed_filepaths, formatted_detections
 
 def main():
-    if not os.path.exists(INPUT_DIR):
-        print(f"❌ La carpeta de entrada {INPUT_DIR} no existe.")
-        return
+    print("1. Indexando archivos de video con claves compuestas (SL/fecha/video)...")
+    video_map = index_videos(VIDEOS_DIR)
+    print(f"Total de videos indexados: {len(video_map)}")
+    
+    all_filepaths = []
+    combined_detections = {}
 
-    # 🔍 Búsqueda RECURSIVA de archivos .json
-    json_files = []
-    for root, _, files in os.walk(INPUT_DIR):
-        for file in files:
-            if file.lower().endswith(".json"):
-                json_files.append(os.path.join(root, file))
+    print("2. Vinculando JSONs con sus respectivos videos...")
+    matched_count = 0
+    
+    # Búsqueda flexible de archivos JSON de detecciones
+    json_files = list(JSONS_DIR.rglob("*.json"))
+    print(f"Archivos JSON encontrados en la carpeta: {len(json_files)}")
 
-    if not json_files:
-        print(
-            f"⚠️ No se encontraron archivos JSON en {INPUT_DIR} ni en sus subcarpetas."
-        )
-        return
+    for json_file in json_files:
+        if "detection" not in json_file.name.lower():
+            continue
 
-    print(
-        f"📂 Se encontraron {len(json_files)} archivo(s) JSON en total. Procesando con SpeciesNet..."
-    )
-    model = load_classifier()
-
-    for idx, input_path in enumerate(sorted(json_files), 1):
-        # 📁 Replicar la estructura de subcarpetas en el directorio de salida
-        rel_path = os.path.relpath(input_path, INPUT_DIR)
-        output_path = os.path.join(OUTPUT_DIR, rel_path)
-
-        # Crear subcarpetas si no existen
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        print(f"\n[{idx}/{len(json_files)}] Procesando: {rel_path}")
-
-        with open(input_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        if "metadata" in data:
-            data["metadata"]["species_model"] = "Google SpeciesNet"
-
-        videos = data.get("videos", [])
-        for v_idx, video_data in enumerate(videos, 1):
-            print(
-                f"   └─ Video {v_idx}/{len(videos)}: {video_data.get('file')}"
+        json_key = extract_key(json_file)
+        
+        if json_key and json_key in video_map:
+            matched_count += 1
+            video_path = video_map[json_key]
+            filepaths, detections = process_video_and_json(
+                video_path, json_file, TEMP_FRAMES_DIR, json_key
             )
-            process_video_species(video_data, model)
+            all_filepaths.extend(filepaths)
+            combined_detections.update(detections)
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+    print(f"Coincidencias encontradas y procesadas: {matched_count}")
 
-        print(f"   💾 Guardado en: {output_path}")
+    if not all_filepaths:
+        raise RuntimeError(
+            f"No se pudo extraer ningún frame. Revisa que las carpetas "
+            f"'{VIDEOS_DIR.resolve()}' y '{JSONS_DIR.resolve()}' existan y coincidan en sus rutas."
+        )
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
+    # -------------------------------------------------------------------------
+    # Guardar detecciones con el esquema exacto de SpeciesNet
+    # -------------------------------------------------------------------------
+    temp_detections_json = "temp_detections.json"
+    
+    predictions_list = []
+    for filepath, det_data in combined_detections.items():
+        predictions_list.append({
+            "filepath": filepath,
+            "detections": det_data.get("detections", [])
+        })
 
-    print(
-        f"\n🎉 ¡Proceso completado! Todos los archivos procesados se encuentran en:\n👉 {OUTPUT_DIR}"
+    wrapped_detections = {
+        "predictions": predictions_list
+    }
+
+    with open(temp_detections_json, "w", encoding="utf-8") as f:
+        json.dump(wrapped_detections, f, ensure_ascii=False, indent=4)
+
+    print("3. Preparando mapa de instancias e iniciando SpeciesNet...")
+    instances_dict = prepare_instances_dict(
+        filepaths=all_filepaths,
+        country=COUNTRY_CODE
     )
 
+    detections_dict, _ = load_partial_predictions(
+        temp_detections_json,
+        instances_dict["instances"]
+    )
+
+    model = SpeciesNet(DEFAULT_MODEL, components="classifier", geofence=True)
+    
+    model.classify(
+        instances_dict=instances_dict,
+        detections_dict=detections_dict,
+        run_mode="multi_thread",
+        batch_size=8,
+        progress_bars=True,
+        predictions_json=OUTPUT_JSON
+    )
+
+    print(f"\n¡Proceso finalizado con éxito! Predicciones guardadas en: {OUTPUT_JSON}")
 
 if __name__ == "__main__":
     main()

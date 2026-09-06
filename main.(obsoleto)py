@@ -1,0 +1,60 @@
+from speciesnet import SpeciesNet
+from speciesnet.utils import prepare_instances_dict, load_partial_predictions
+import json
+
+# -------------------------------------------------------------------------
+# 1. Configuración de rutas y parámetros de entrada
+# -------------------------------------------------------------------------
+# Ruta al archivo TXT con la lista de imágenes/frames
+FILEPATHS_TXT = "lista_de_frames.txt" 
+
+# Archivo JSON con las detecciones de MegaDetector
+DETECTIONS_JSON = "detecciones_megadetector.json"
+
+# Ruta donde se guardará el JSON resultante con las predicciones finales
+PREDICTIONS_JSON = "predicciones_finales.json"
+
+# Código ISO de 3 letras del país (ej. "ARG" para Argentina)
+COUNTRY_CODE = "ARG" 
+
+# Tamaño del lote para la inferencia
+BATCH_SIZE = 8
+
+
+def main():
+    print("1. Preparando diccionario de instancias...")
+    # Convierte la lista de imágenes e información de país en la estructura esperada
+    instances_dict = prepare_instances_dict(
+        filepaths_txt=FILEPATHS_TXT,
+        country=COUNTRY_CODE
+    )
+
+    print("2. Cargando detecciones previas de MegaDetector...")
+    # Carga las detecciones desde el archivo JSON
+    detections_dict, _ = load_partial_predictions(
+        DETECTIONS_JSON, 
+        instances_dict["instances"]
+    )
+
+    print("3. Cargando modelo SpeciesNet (modo clasificador)...")
+    # Inicializa únicamente el componente clasificador
+    model = SpeciesNet(
+        components="classifier",
+        geofence=True
+    )
+
+    print("4. Ejecutando la clasificación sobre las detecciones...")
+    predictions_dict = model.classify(
+        instances_dict=instances_dict,
+        detections_dict=detections_dict,
+        run_mode="multi_thread",
+        batch_size=BATCH_SIZE,
+        progress_bars=True,
+        predictions_json=PREDICTIONS_JSON
+    )
+
+    print(f"\n¡Proceso completado! Los resultados se guardaron en: {PREDICTIONS_JSON}")
+
+
+if __name__ == "__main__":
+    main()
