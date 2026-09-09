@@ -8,9 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+env
 *.pt
 
 reporte_detecciones.xlsx
 resultados_deteccion.json
 
 comando.txt
+
+data
+FotoTrampeo
