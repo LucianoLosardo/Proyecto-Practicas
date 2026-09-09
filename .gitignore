@@ -18,6 +18,14 @@ temp_frames/
 FotoTrampeo/
 jsons/
 env/
+temp_frames_v1/
+frames_1/
+OLD/
+filepaths_procesados.txt
 .temp_frames
 .FotoTrampeo
 .jsons
+.temp_frames_v1
+.frames_1
+temp_detections.json
+especies_resultados_finales.json
