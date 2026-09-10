@@ -1,24 +1,14 @@
-#Este archivo:
-#   - Convierte los videos en imagenes (frame a frame), solo para los frames que contienen animales
-#   - Crea un nuevo json, temp_detections.json, en base a los outputs de mega detector.
-#       - Les añade el path correcto a las nuevas imagenes generadas
-#       - adecúa el formato para que matchee el input esperado por species net
-# 
-
-#Actualizacion:
-#   - esta version NO analiza frames para los cuales megadetector no detectó ningun objeto (detections: []).
-#   - tampoco procesa frames en los que solo hay detecciones de otras categorias (3 o 2)
-
 import os
 import json
 import cv2
 from pathlib import Path
-
+# Aca se generan los frames de los videos junto con el archivo temp_detections
 # -------------------------------------------------------------------------
 # Configuración de Rutas y Parámetros
 # -------------------------------------------------------------------------
-VIDEOS_DIR = Path("./FotoTrampeo")
-JSONS_DIR = Path("./jsons")
+TARGET_SL = "SL003"  # Define aquí la carpeta SL a procesar (ej: "SL001", "SL002", etc.)
+VIDEOS_DIR = Path("/mnt/disco/ProyectoJabali/FotosCamarasTrampas")
+JSONS_DIR = Path("/mnt/disco/ProyectoJabali/jsons_filtrados/SL003")
 TEMP_FRAMES_DIR = Path("./temp_frames")
 OUTPUT_JSON = "especies_resultados_finales.json"
 COUNTRY_CODE = "ARG"
@@ -44,18 +34,22 @@ def extract_key(path: Path) -> str:
     if not sl_part or not fecha_part:
         return None
 
-    # Si es un archivo .mp4 tomamos el stem (sin extension), si es un json tomamos el nombre del directorio padre
+    # Si es un archivo .mp4 tomamos el stem (sin extensión), si es un json tomamos el nombre del directorio padre
     item_name = path.stem if path.suffix.lower() in [".mp4", ".m4v"] else path.parent.name
     
     return f"{sl_part}/{fecha_part}/{item_name}"
 
-def index_videos(base_path: Path) -> dict:
-    """Busca todos los mp4/m4v y los mapea usando la clave única (SL/fecha/video)."""
+def index_videos(base_path: Path, target_sl: str = None) -> dict:
+    """Busca todos los mp4/m4v (en mayúsculas y minúsculas) y los mapea usando la clave única."""
     video_map = {}
-    for ext in ["*.mp4", "*.m4v"]:
+    extensions = ["*.mp4", "*.MP4", "*.m4v", "*.M4V", "*.avi", "*.AVI"]
+    
+    for ext in extensions:
         for path in base_path.rglob(ext):
             key = extract_key(path)
             if key:
+                if target_sl and not key.startswith(f"{target_sl}/"):
+                    continue
                 video_map[key] = path
     return video_map
 
@@ -90,8 +84,7 @@ def process_video_and_json(video_path: Path, json_path: Path, temp_dir: Path, ke
                     "bbox": d.get("bbox", [])
                 })
 
-        # 3. CONDICIÓN CLAVE: Si NO hay animales en det_list, NO se guarda la imagen 
-        # ni se registra para SpeciesNet
+        # 3. CONDICIÓN CLAVE: Si NO hay animales en det_list, NO se guarda la imagen ni se registra
         if not det_list:
             continue
 
@@ -112,7 +105,6 @@ def process_video_and_json(video_path: Path, json_path: Path, temp_dir: Path, ke
             
             filepath_str = str(frame_out_path.resolve())
             
-            # Recién acá se aprueba el frame para enviarlo a SpeciesNet
             processed_filepaths.append(filepath_str)
             formatted_detections[filepath_str] = {"detections": det_list}
 
@@ -120,9 +112,9 @@ def process_video_and_json(video_path: Path, json_path: Path, temp_dir: Path, ke
     return processed_filepaths, formatted_detections
 
 def main():
-    print("1. Indexando archivos de video con claves compuestas (SL/fecha/video)...")
-    video_map = index_videos(VIDEOS_DIR)
-    print(f"Total de videos indexados: {len(video_map)}")
+    print(f"1. Indexando videos para la carpeta objetivo '{TARGET_SL}'...")
+    video_map = index_videos(VIDEOS_DIR, target_sl=TARGET_SL)
+    print(f"Total de videos indexados para {TARGET_SL}: {len(video_map)}")
     
     all_filepaths = []
     combined_detections = {}
@@ -130,9 +122,8 @@ def main():
     print("2. Vinculando JSONs con sus respectivos videos...")
     matched_count = 0
     
-    # Búsqueda flexible de archivos JSON de detecciones
     json_files = list(JSONS_DIR.rglob("*.json"))
-    print(f"Archivos JSON encontrados en la carpeta: {len(json_files)}")
+    print(f"Archivos JSON encontrados en total: {len(json_files)}")
 
     for json_file in json_files:
         if "detection" not in json_file.name.lower():
@@ -140,6 +131,10 @@ def main():
 
         json_key = extract_key(json_file)
         
+        # Filtrar solo el lote SL indicado
+        if json_key and TARGET_SL and not json_key.startswith(f"{TARGET_SL}/"):
+            continue
+
         if json_key and json_key in video_map:
             matched_count += 1
             video_path = video_map[json_key]
@@ -153,8 +148,8 @@ def main():
 
     if not all_filepaths:
         raise RuntimeError(
-            f"No se pudo extraer ningún frame. Revisa que las carpetas "
-            f"'{VIDEOS_DIR.resolve()}' y '{JSONS_DIR.resolve()}' existan y coincidan en sus rutas."
+            f"No se pudo extraer ningún frame para '{TARGET_SL}'. "
+            f"Revisa que la carpeta contenga imágenes/videos e información coincidente."
         )
 
     # -------------------------------------------------------------------------

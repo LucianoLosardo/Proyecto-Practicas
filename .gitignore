@@ -18,6 +18,8 @@ temp_frames/
 FotoTrampeo/
 jsons/
 env/
+.venv/
+venv/
 temp_frames_v1/
 frames_1/
 OLD/
