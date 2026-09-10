@@ -1,10 +1,28 @@
-*Wildcam - Detección de Fauna con MegaDetector v5*
-Herramienta en Python diseñada para procesar masivamente videos de cámaras trampa utilizando el modelo MegaDetector v5 con el fin de detectar jabalies en esos videos. Extrae automáticamente las detecciones de fauna, personas y vehículos, exportando los resultados en un reporte estructurado en formato JSON, optimizado para trabajar con grandes volúmenes de datos sin agotar la memoria RAM o VRAM del sistema. 
+## Ejecución
+* 1 - Configurar las rutas en `preprocesamiento.py`
+* 2 - Correr `preprocesamiento.py`: Guarda los frames temporales y el json input para species net
+* 3 - Correr `main.py` : prepara las instancias y corre Species Net
 
-*Características principales*
-    - Detección Automática de Fauna: Detecta animales, personas y vehículos usando los pesos de MegaDetector v5 (md_v5a.0.0.pt).
+---
 
-    - Exportación Estructurada a JSON: Guarda cuadros delimitadores (bbox), marcas de tiempo en segundos (time_sec), fotograma exacto (frame), clases detectadas y niveles de certeza (confidence).
+## Componentes y Funcionamiento
 
-Proceso actual: 
-    - Filtrado de JSONS 
+### Archivos Principales
+
+* **`preprocesamiento.py`**  
+  Encargado de la preparación de datos. Indexa los videos y los JSONs de MegaDetector mediante una clave única (`SL---/fecha/video`). Lee las detecciones, filtra únicamente los frames con presencia de animales (categoría `1`) y utiliza OpenCV para extraer solo esos fotogramas a la carpeta `temp_frames/`. Finalmente, reestructura y guarda el archivo `temp_detections.json` con el formato exacto exigido por SpeciesNet.
+
+  > **Configuración requerida:** hay que definir e ingresar las rutas hacia las carpetas de videos (`VIDEOS_DIR`) y JSONs de MegaDetector (`JSONS_DIR`) directamente dentro del script `preprocesamiento.py` antes de la primera ejecución.
+
+* **`main.py`**  
+  Corre Species Net. Lee `temp_detections.json` y verifica la existencia física de cada fotograma en el disco (`os.path.isfile`). Si se movieron o eliminaron imágenes manualmente de la carpeta temporal (temp_frames), el script evita procesarlas. Luego prepara el mapa de instancias con la geolocalización correspondiente (`ARG`) y ejecuta SpeciesNet para generar el archivo con los resultados de la clasificación.
+
+---
+
+### Archivos y Carpetas Temporales
+
+* **`temp_frames/` (Carpeta temporal)**  
+  Almacena únicamente los fotogramas extraídos en formato `.jpg` que contienen animales confirmados por MegaDetector. Sirve como el conjunto de imágenes sobre el cual SpeciesNet realizará la clasificación.
+
+* **`temp_detections.json` (Archivo temporal)**  
+  Contiene la lista filtrada de detecciones (*bounding boxes*, etiquetas y nivel de confianza) asociadas a las imágenes guardadas en `temp_frames/`. Sincroniza la información devuelta por MegaDetector con las entradas requeridas para alimentar el modelo de clasificación.

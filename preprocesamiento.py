@@ -1,0 +1,175 @@
+import os
+import json
+import cv2
+from pathlib import Path
+# Aca se generan los frames de los videos junto con el archivo temp_detections
+# -------------------------------------------------------------------------
+# Configuración de Rutas y Parámetros
+# -------------------------------------------------------------------------
+TARGET_SL = "SL003"  # Define aquí la carpeta SL a procesar (ej: "SL001", "SL002", etc.)
+VIDEOS_DIR = Path("/mnt/disco/ProyectoJabali/FotosCamarasTrampas")
+JSONS_DIR = Path("/mnt/disco/ProyectoJabali/jsons_filtrados/SL003")
+TEMP_FRAMES_DIR = Path("./temp_frames")
+OUTPUT_JSON = "especies_resultados_finales.json"
+COUNTRY_CODE = "ARG"
+
+def extract_key(path: Path) -> str:
+    """
+    Extrae la clave única basada en (SL---, fecha, nombre_video/carpeta)
+    recorriendo los padres de la ruta.
+    Ejemplo: FotoTrampeo/SL000/20250607/DCMI/IMG_0005.mp4 -> 'SL000/20250607/IMG_0005'
+    """
+    parts = path.parts
+    sl_part = None
+    fecha_part = None
+    
+    # Buscar las carpetas que representan el SL--- y la fecha dentro de la ruta
+    for i, part in enumerate(parts):
+        if part.startswith("SL"):
+            sl_part = part
+            if i + 1 < len(parts):
+                fecha_part = parts[i + 1]
+            break
+            
+    if not sl_part or not fecha_part:
+        return None
+
+    # Si es un archivo .mp4 tomamos el stem (sin extensión), si es un json tomamos el nombre del directorio padre
+    item_name = path.stem if path.suffix.lower() in [".mp4", ".m4v"] else path.parent.name
+    
+    return f"{sl_part}/{fecha_part}/{item_name}"
+
+def index_videos(base_path: Path, target_sl: str = None) -> dict:
+    """Busca todos los mp4/m4v (en mayúsculas y minúsculas) y los mapea usando la clave única."""
+    video_map = {}
+    extensions = ["*.mp4", "*.MP4", "*.m4v", "*.M4V", "*.avi", "*.AVI"]
+    
+    for ext in extensions:
+        for path in base_path.rglob(ext):
+            key = extract_key(path)
+            if key:
+                if target_sl and not key.startswith(f"{target_sl}/"):
+                    continue
+                video_map[key] = path
+    return video_map
+
+def process_video_and_json(video_path: Path, json_path: Path, temp_dir: Path, key_prefix: str):
+    """Extrae frames y guarda detecciones ÚNICAMENTE si contienen animales (categoría 1)."""
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    category_map = data.get("detection_categories", {})
+    cap = cv2.VideoCapture(str(video_path))
+    processed_filepaths = []
+    formatted_detections = {}
+
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    for item in data.get("images", []):
+        raw_detections = item.get("detections", [])
+        
+        # 1. Ignorar si MegaDetector no encontró nada
+        if not raw_detections:
+            continue
+
+        # 2. Filtrar dejando EXCLUSIVAMENTE la categoría 1 ("animal")
+        det_list = []
+        for d in raw_detections:
+            cat_id = str(d.get("category"))
+            if cat_id == "1":
+                cat_name = category_map.get(cat_id, "animal")
+                det_list.append({
+                    "label": cat_name,
+                    "conf": d.get("conf", 0.0),
+                    "bbox": d.get("bbox", [])
+                })
+
+        # 3. CONDICIÓN CLAVE: Si NO hay animales en det_list, NO se guarda la imagen ni se registra
+        if not det_list:
+            continue
+
+        file_name = item["file"]  # ej: "frame_000000.jpg"
+        
+        try:
+            frame_idx = int(file_name.replace("frame_", "").replace(".jpg", ""))
+        except ValueError:
+            continue
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+
+        if ret:
+            safe_prefix = key_prefix.replace("/", "_")
+            frame_out_path = temp_dir / f"{safe_prefix}_{file_name}"
+            cv2.imwrite(str(frame_out_path), frame)
+            
+            filepath_str = str(frame_out_path.resolve())
+            
+            processed_filepaths.append(filepath_str)
+            formatted_detections[filepath_str] = {"detections": det_list}
+
+    cap.release()
+    return processed_filepaths, formatted_detections
+
+def main():
+    print(f"1. Indexando videos para la carpeta objetivo '{TARGET_SL}'...")
+    video_map = index_videos(VIDEOS_DIR, target_sl=TARGET_SL)
+    print(f"Total de videos indexados para {TARGET_SL}: {len(video_map)}")
+    
+    all_filepaths = []
+    combined_detections = {}
+
+    print("2. Vinculando JSONs con sus respectivos videos...")
+    matched_count = 0
+    
+    json_files = list(JSONS_DIR.rglob("*.json"))
+    print(f"Archivos JSON encontrados en total: {len(json_files)}")
+
+    for json_file in json_files:
+        if "detection" not in json_file.name.lower():
+            continue
+
+        json_key = extract_key(json_file)
+        
+        # Filtrar solo el lote SL indicado
+        if json_key and TARGET_SL and not json_key.startswith(f"{TARGET_SL}/"):
+            continue
+
+        if json_key and json_key in video_map:
+            matched_count += 1
+            video_path = video_map[json_key]
+            filepaths, detections = process_video_and_json(
+                video_path, json_file, TEMP_FRAMES_DIR, json_key
+            )
+            all_filepaths.extend(filepaths)
+            combined_detections.update(detections)
+
+    print(f"Coincidencias encontradas y procesadas: {matched_count}")
+
+    if not all_filepaths:
+        raise RuntimeError(
+            f"No se pudo extraer ningún frame para '{TARGET_SL}'. "
+            f"Revisa que la carpeta contenga imágenes/videos e información coincidente."
+        )
+
+    # -------------------------------------------------------------------------
+    # Guardar detecciones con el esquema exacto de SpeciesNet
+    # -------------------------------------------------------------------------
+    temp_detections_json = "temp_detections.json"
+    
+    predictions_list = []
+    for filepath, det_data in combined_detections.items():
+        predictions_list.append({
+            "filepath": filepath,
+            "detections": det_data.get("detections", [])
+        })
+
+    wrapped_detections = {
+        "predictions": predictions_list
+    }
+
+    with open(temp_detections_json, "w", encoding="utf-8") as f:
+        json.dump(wrapped_detections, f, ensure_ascii=False, indent=4)
+
+if __name__ == "__main__":
+    main()
