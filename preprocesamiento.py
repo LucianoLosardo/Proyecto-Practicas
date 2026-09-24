@@ -19,6 +19,8 @@ BASE_TEMP_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_FRAMES_DIR = BASE_TEMP_DIR / "temp_frames"
 TEMP_DETECTIONS_JSON = Path("/media/luciano/LocalDisk/temp_proyecto/temp_detections.json")
 
+# Confianza minima para que un json de Mega Detector sea procesado
+UMB_CONF = 0.5
 
 def extract_key(path: Path) -> str:
     """Extrae la clave única 'SLxxx/FECHA/NOMBRE_ITEM'."""
@@ -76,12 +78,14 @@ def process_video_and_json(video_path: Path, json_path: Path, temp_dir: Path, ke
         for d in raw_detections:
             cat_id = str(d.get("category"))
             if cat_id == "1":
-                cat_name = category_map.get(cat_id, "animal")
-                det_list.append({
-                    "label": cat_name,
-                    "conf": d.get("conf", 0.0),
-                    "bbox": d.get("bbox", [])
-                })
+                conf = d.get("conf", 0.0)
+                if conf >= UMB_CONF:
+                    cat_name = category_map.get(cat_id, "animal")
+                    det_list.append({
+                        "label": cat_name,
+                        "conf": d.get("conf", 0.0),
+                        "bbox": d.get("bbox", [])
+                    })
 
         if not det_list:
             continue
@@ -109,11 +113,11 @@ def process_video_and_json(video_path: Path, json_path: Path, temp_dir: Path, ke
 
 
 def main():
-    print(f"1. Indexando videos para la carpeta objetivo '{TARGET_SL}'...")
+    print(f"idexando videos para la carpeta objetivo '{TARGET_SL}'...")
     video_map = index_videos(VIDEOS_DIR, target_sl=TARGET_SL)
     print(f"Total de videos indexados para {TARGET_SL}: {len(video_map)}")
 
-    print("\n2. Filtrando JSONs correspondientes...")
+    print("\nFiltrando JSONs correspondientes...")
     all_jsons = [j for j in JSONS_DIR.rglob("*.json") if "detection" in j.name.lower()]
 
     # Filtrar de antemano para poder calcular el total y mostrar el % preciso
@@ -125,15 +129,14 @@ def main():
 
     if not target_items:
         raise RuntimeError(
-            f"No se pudieron vincular JSONs y videos para '{TARGET_SL}'. "
-            f"Verifica nombres de carpetas o extensiones."
+            f"no se pudieron vincular JSONs y videos para '{TARGET_SL}'. "
         )
 
     all_filepaths = []
     combined_detections = {}
 
-    print(f"\n3. Extrayendo frames ({len(target_items)} videos a procesar):")
-    # Barra de porcentaje con tqdm
+    print(f"\nextrayendo frames ({len(target_items)} videos a procesar):")
+    #barra de porcentaje con tqdm
     for json_file, json_key in tqdm(target_items, desc=f"Procesando {TARGET_SL}", unit="video"):
         video_path = video_map[json_key]
         filepaths, detections = process_video_and_json(
@@ -148,7 +151,7 @@ def main():
             f"Revisa que existan animales (categoría 1) en las detecciones."
         )
 
-    print("\n4. Guardando JSON temporal de detecciones...")
+    print("\nGuardando JSON temporal de detecciones...")
     predictions_list = [
         {"filepath": fp, "detections": det_data.get("detections", [])}
         for fp, det_data in combined_detections.items()

@@ -19,14 +19,14 @@ def main():
     if not json_path.exists():
         raise FileNotFoundError(f"No se encontró el archivo: {TEMP_DETECTIONS_JSON}")
 
-    # 1. Cargar el JSON temporal
-    print("1. Leyendo detecciones temporales...")
+    # cargar el JSON temporal
+    print("Leyendo detecciones temporales...")
     with open(json_path, "r", encoding="utf-8") as f:
         raw_json_data = json.load(f)
 
     predictions_data = raw_json_data.get("predictions", [])
 
-    # 2. Extraer rutas y filtrar solo las que EXISTEN en disco (con barra de progreso)
+    # extraer rutas y filtrar solo las que EXISTEN en disco (con barra de progreso)
     all_filepaths = []
     filtered_detections_dict = {}
 
@@ -41,23 +41,23 @@ def main():
 
     print(f"Total de imágenes listas para clasificar: {len(all_filepaths)}")
 
-    # 3. Preparar mapa de instancias
-    print("3. Estructurando instancias para SpeciesNet...")
+    # preparar mapa de instancias
+    print("Estructurando instancias para SpeciesNet...")
     instances_dict = prepare_instances_dict(
         filepaths=all_filepaths,
         country=COUNTRY_CODE
     )
 
-    # 4. Clasificación
+    # clasificación
     model = SpeciesNet(DEFAULT_MODEL, components="classifier", geofence=True)
 
-    print("4. Ejecutando clasificación con SpeciesNet...")    
+    print("Ejecutando clasificación con SpeciesNet...")    
     model.classify(
         instances_dict=instances_dict,
         detections_dict=filtered_detections_dict,
         run_mode="multi_thread",
         batch_size=8,
-        progress_bars=True,  # Mantiene activa la barra nativa de inferencia del modelo
+        progress_bars=True,  #mantiene activa la barra nativa de inferencia del modelo
         predictions_json=OUTPUT_JSON
     )
 
