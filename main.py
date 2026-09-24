@@ -11,7 +11,7 @@ from speciesnet.utils import prepare_instances_dict
 # -------------------------------------------------------------------------
 OUTPUT_JSON = "especies_resultados_finales.json"
 COUNTRY_CODE = "ARG"
-TEMP_DETECTIONS_JSON = "temp_detections.json"
+TEMP_DETECTIONS_JSON = "/media/luciano/Local Disk/temp_proyecto/temp_detections.json"
 
 def main():   
     json_path = Path(TEMP_DETECTIONS_JSON)
